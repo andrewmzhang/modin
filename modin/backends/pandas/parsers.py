@@ -463,7 +463,7 @@ class PandasSQLParser(PandasParser):
         num_splits = kwargs.pop("num_splits", None)
         import pyodbc
 
-        con = pyodbc.connect(con, autocommit=True)
+        con = pyodbc.connect(DSN=con, autocommit=True)
         if num_splits is None:
             return pandas.read_sql(sql, con, index_col=index_col, **kwargs)
         df = pandas.read_sql(sql, con, index_col=index_col, **kwargs)
