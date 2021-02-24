@@ -63,7 +63,7 @@ class SQLDispatcher(FileDispatcher):
         pyodbc_conn = pyodbc.connect(DSN=con, autocommit=True)
         row_cnt = pandas.read_sql(row_cnt_query, pyodbc_conn).squeeze()
         cols_names_df = pandas.read_sql(
-            "SELECT * FROM ({}) as foo LIMIT 0".format(sql), con, index_col=index_col
+            "SELECT * FROM ({}) as foo LIMIT 0".format(sql), pyodbc_conn, index_col=index_col
         )
         cols_names = cols_names_df.columns
         num_partitions = NPartitions.get()
