@@ -74,7 +74,7 @@ class SQLDispatcher(FileDispatcher):
         for part in range(num_partitions):
             offset = part * limit
             query = "SELECT * FROM ({}) as foo LIMIT {} OFFSET {} ORDER BY {}".format(
-                sql, limit, offset, ",".join(list(cols_names))
+                sql, limit, offset, ", ".join(list(cols_names))
             )
             partition_id = cls.deploy(
                 cls.parse,
