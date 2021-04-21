@@ -23,6 +23,30 @@ from modin.error_message import ErrorMessage
 from modin.backends.pandas.parsers import find_common_type_cat as find_common_type
 
 
+def apply_index_decorator(f, apply_axis=None, inherit=False):
+    from functools import wraps
+
+    @wraps(f)
+    def magic(self, *args, **kwargs):
+        if apply_axis is not None:
+            if apply_axis == "both":
+                if self._deferred_index_apply and self._deferred_column_apply:
+                    self.__apply_index_objs(axis=None)
+                elif self._deferred_index_apply:
+                    self.__apply_index_objs(axis=0)
+                elif self._deferred_column_apply(axis=1):
+                    self.__apply_index_objs(axis=1)
+            elif apply_axis == "opposite":
+                if "axis" not in kwargs:
+                    
+        result = f(self, *args, **kwargs)
+        if inherit:
+            result._deferred_index_apply = self._deferred_index_apply
+            result._deferred_column_apply = self._deferred_column_apply
+        return result
+
+    return magic
+
 class BasePandasFrame(object):
     """An abstract class that represents the Parent class for any Pandas DataFrame class.
 
@@ -282,7 +306,20 @@ class BasePandasFrame(object):
         self._column_widths_cache = [w for w in self._column_widths if w != 0]
         self._row_lengths_cache = [r for r in self._row_lengths if r != 0]
 
+    _deferred_index_apply = False
+    _deferred_column_apply = False
+
     def _apply_index_objs(self, axis=None):
+        if axis is None:
+            self._deferred_index_apply = True
+            self._deferred_column_apply = True
+        elif axis == 0:
+            self._deferred_index_apply = True
+        else:
+            self._deferred_column_apply = True
+        return
+
+    def __apply_index_objs(self, axis=None):
         """Lazily applies the index object (Index or Columns) to the partitions.
 
         Args:
@@ -323,6 +360,8 @@ class BasePandasFrame(object):
                     for i in range(len(self._partitions))
                 ]
             )
+            self._deferred_index_apply = False
+            self._deferred_column_apply = False
         elif axis == 0:
 
             def apply_idx_objs(df, idx):
@@ -342,6 +381,7 @@ class BasePandasFrame(object):
                     for i in range(len(self._partitions))
                 ]
             )
+            self._deferred_index_apply = False
         elif axis == 1:
 
             def apply_idx_objs(df, cols):
@@ -364,6 +404,7 @@ class BasePandasFrame(object):
             ErrorMessage.catch_bugs_and_request_email(
                 axis is not None and axis not in [0, 1]
             )
+            self._deferred_column_apply = False
 
     def mask(
         self,
@@ -512,6 +553,8 @@ class BasePandasFrame(object):
             or len(col_numeric_idx) == 1
             or np.all(col_numeric_idx[1:] >= col_numeric_idx[:-1])
         ):
+            intermediate._deferred_column_apply = self._deferred_column_apply
+            intermediate._deferred_index_apply = self._deferred_index_apply
             return intermediate
         # The new labels are often smaller than the old labels, so we can't reuse the
         # original order values because those were mapped to the original data. We have
@@ -533,9 +576,12 @@ class BasePandasFrame(object):
             new_col_order = [col_order_mapping[idx] for idx in col_numeric_idx]
         else:
             new_col_order = None
-        return intermediate.reorder_labels(
+        result = intermediate.reorder_labels(
             row_numeric_idx=new_row_order, col_numeric_idx=new_col_order
         )
+        result._deferred_column_apply = self._deferred_column_apply
+        result._deferred_index_apply = self._deferred_index_apply
+        return result
 
     def from_labels(self) -> "BasePandasFrame":
         """Convert the row labels to a column of data, inserted at the first position.
@@ -1195,12 +1241,15 @@ class BasePandasFrame(object):
             for axis in [0, 1]
         ]
 
-        return self.__constructor__(
+        result = self.__constructor__(
             new_partitions,
             *new_axes,
             *new_lengths,
             dtypes=dtypes,
         )
+        result._deferred_column_apply = self._deferred_column_apply
+        result._deferred_index_apply = self._deferred_index_apply
+        return result
 
     def _fold(self, axis, func):
         """Perform a function across an entire axis.
@@ -2080,6 +2129,14 @@ class BasePandasFrame(object):
         -------
             Pandas DataFrame.
         """
+        print(self._deferred_index_apply)
+        print(self._deferred_column_apply)
+        if self._deferred_column_apply and self._deferred_index_apply:
+            self.__apply_index_objs(axis=None)
+        elif self._deferred_index_apply:
+            self.__apply_index_objs(axis=0)
+        elif self._deferred_column_apply:
+            self.__apply_index_objs(axis=1)
         df = self._frame_mgr_cls.to_pandas(self._partitions)
         if df.empty:
             if len(self.columns) != 0:

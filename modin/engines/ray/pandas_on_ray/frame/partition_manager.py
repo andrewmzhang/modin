@@ -152,34 +152,46 @@ class PandasOnRayFrameManager(RayFrameManager):
     @classmethod
     def broadcast_apply(cls, axis, apply_func, left, right, other_name="r"):
         def mapper(df, others):
-            other = pandas.concat(others, axis=axis ^ 1)
+            if len(others) == 1:
+                other = others[0]
+            else:
+                other = pandas.concat(others, axis=axis ^ 1)
             return apply_func(df, **{other_name: other})
 
         mapper = ray.put(mapper)
-        new_partitions = np.array(
-            [
-                [
-                    PandasOnRayFramePartition(
-                        func.remote(
-                            part.oid,
-                            mapper,
-                            part.call_queue,
-                            [obj[col_idx].call_queue for obj in right]
-                            if axis
-                            else [obj.call_queue for obj in right[row_idx]],
-                            *(
-                                [obj[col_idx].oid for obj in right]
-                                if axis
-                                else [obj.oid for obj in right[row_idx]]
-                            ),
-                        )
-                    )
-                    for col_idx, part in enumerate(left[row_idx])
-                ]
+        if axis == 0:
+            other_queue = [
+                ray.put([obj.call_queue for obj in right[row_idx]])
                 for row_idx in range(len(left))
             ]
+        else:
+            other_queue = [
+                ray.put([obj[col_idx].call_queue for obj in right])
+                for col_idx in range(len(right))
+            ]
+        args = [
+            [
+                (
+                    part.oid,
+                    mapper,
+                    part.call_queue,
+                    other_queue[row_idx],
+                    *(
+                        [obj[col_idx].oid for obj in right]
+                        if axis
+                        else [obj.oid for obj in right[row_idx]]
+                    ),
+                )
+                for col_idx, part in enumerate(left[row_idx])
+            ]
+            for row_idx in range(len(left))
+        ]
+        return np.array(
+            [
+                [PandasOnRayFramePartition(func.remote(*row_args)) for row_args in row]
+                for row in args
+            ]
         )
-        return new_partitions
 
     @classmethod
     @progress_bar_wrapper
