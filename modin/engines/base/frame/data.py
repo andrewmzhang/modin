@@ -36,9 +36,9 @@ def apply_index_decorator(f, apply_axis=None, inherit=False):
                     self.__apply_index_objs(axis=0)
                 elif self._deferred_column_apply(axis=1):
                     self.__apply_index_objs(axis=1)
-            elif apply_axis == "opposite":
-                if "axis" not in kwargs:
-                    
+            # elif apply_axis == "opposite":
+            #     if "axis" not in kwargs:
+            #
         result = f(self, *args, **kwargs)
         if inherit:
             result._deferred_index_apply = self._deferred_index_apply
