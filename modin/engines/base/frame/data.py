@@ -23,29 +23,47 @@ from modin.error_message import ErrorMessage
 from modin.backends.pandas.parsers import find_common_type_cat as find_common_type
 
 
-def apply_index_decorator(f, apply_axis=None, inherit=False):
-    from functools import wraps
+def apply_index_decorator(apply_axis=None, inherit=False, axis_arg=-1):
+    def decorator(f):
+        from functools import wraps
 
-    @wraps(f)
-    def magic(self, *args, **kwargs):
-        if apply_axis is not None:
-            if apply_axis == "both":
-                if self._deferred_index_apply and self._deferred_column_apply:
-                    self.__apply_index_objs(axis=None)
-                elif self._deferred_index_apply:
-                    self.__apply_index_objs(axis=0)
-                elif self._deferred_column_apply(axis=1):
-                    self.__apply_index_objs(axis=1)
-            # elif apply_axis == "opposite":
-            #     if "axis" not in kwargs:
-            #
-        result = f(self, *args, **kwargs)
-        if inherit:
-            result._deferred_index_apply = self._deferred_index_apply
-            result._deferred_column_apply = self._deferred_column_apply
-        return result
+        @wraps(f)
+        def magic(self, *args, **kwargs):
+            if apply_axis is not None:
+                if apply_axis == "both":
+                    if self._deferred_index_apply and self._deferred_column_apply:
+                        self._propagate_index_objs(axis=None)
+                    elif self._deferred_index_apply:
+                        self._propagate_index_objs(axis=0)
+                    elif self._deferred_column_apply:
+                        self._propagate_index_objs(axis=1)
+                elif apply_axis == "opposite":
+                    if "axis" not in kwargs:
+                        axis = args[axis_arg]
+                    else:
+                        axis = kwargs["axis"]
+                    if axis == 0 and self._deferred_column_apply:
+                        self._apply_index_objs(axis=1)
+                    elif axis == 1 and self._apply_index_objs:
+                        self._apply_index_objs(axis=0)
+                elif apply_axis == "same":
+                    if "axis" not in kwargs:
+                        axis = args[axis_arg]
+                    else:
+                        axis = kwargs["axis"]
+                    if axis == 0 and self._deferred_column_apply:
+                        self._apply_index_objs(axis=0)
+                    elif axis == 1 and self._apply_index_objs:
+                        self._apply_index_objs(axis=1)
+            result = f(self, *args, **kwargs)
+            if inherit:
+                result._deferred_index_apply = self._deferred_index_apply
+                result._deferred_column_apply = self._deferred_column_apply
+            return result
 
-    return magic
+        return magic
+    return decorator
+
 
 class BasePandasFrame(object):
     """An abstract class that represents the Parent class for any Pandas DataFrame class.
@@ -319,7 +337,7 @@ class BasePandasFrame(object):
             self._deferred_column_apply = True
         return
 
-    def __apply_index_objs(self, axis=None):
+    def _propagate_index_objs(self, axis=None):
         """Lazily applies the index object (Index or Columns) to the partitions.
 
         Args:
@@ -406,6 +424,7 @@ class BasePandasFrame(object):
             )
             self._deferred_column_apply = False
 
+    @apply_index_decorator(inherit=True)
     def mask(
         self,
         row_indices=None,
@@ -679,6 +698,7 @@ class BasePandasFrame(object):
         result.index = new_labels
         return result
 
+    @apply_index_decorator(apply_axis="both")
     def reorder_labels(self, row_numeric_idx=None, col_numeric_idx=None):
         """Reorder the column and or rows in this DataFrame.
 
@@ -714,6 +734,7 @@ class BasePandasFrame(object):
             col_idx = self.columns
         return self.__constructor__(ordered_cols, row_idx, col_idx)
 
+    @apply_index_decorator(inherit=True)
     def copy(self):
         """Copy this object.
 
@@ -754,6 +775,7 @@ class BasePandasFrame(object):
         dtypes.index = column_names
         return dtypes
 
+    @apply_index_decorator(apply_axis="both")
     def astype(self, col_dtypes):
         """Convert the columns dtypes to given dtypes.
 
@@ -1145,6 +1167,7 @@ class BasePandasFrame(object):
         )
         return result
 
+    @apply_index_decorator(apply_axis="both")
     def _fold_reduce(self, axis, func):
         """
         Apply function that reduce Manager to series but require knowledge of full axis.
@@ -1169,6 +1192,7 @@ class BasePandasFrame(object):
         )
         return self._compute_map_reduce_metadata(axis, new_parts)
 
+    @apply_index_decorator(apply_axis="opposite", axis_arg=0)
     def _map_reduce(self, axis, map_func, reduce_func=None):
         """
         Apply function that will reduce the data to a Pandas Series.
@@ -1200,6 +1224,7 @@ class BasePandasFrame(object):
         )
         return self._compute_map_reduce_metadata(axis, reduce_parts)
 
+    @apply_index_decorator(inherit=True)
     def _map(self, func, dtypes=None, validate_index=False, validate_columns=False):
         """Perform a function that maps across the entire dataset.
 
@@ -1241,16 +1266,14 @@ class BasePandasFrame(object):
             for axis in [0, 1]
         ]
 
-        result = self.__constructor__(
+        return self.__constructor__(
             new_partitions,
             *new_axes,
             *new_lengths,
             dtypes=dtypes,
         )
-        result._deferred_column_apply = self._deferred_column_apply
-        result._deferred_index_apply = self._deferred_index_apply
-        return result
 
+    @apply_index_decorator(apply_axis="both")
     def _fold(self, axis, func):
         """Perform a function across an entire axis.
 
@@ -1278,6 +1301,7 @@ class BasePandasFrame(object):
             self._column_widths,
         )
 
+    @apply_index_decorator(apply_axis="both")
     def filter_full_axis(self, axis, func):
         """Filter data based on the function provided along an entire axis.
 
@@ -1311,6 +1335,7 @@ class BasePandasFrame(object):
             self.dtypes if axis == 0 else None,
         )
 
+    @apply_index_decorator(apply_axis="both")
     def _apply_full_axis(
         self,
         axis,
@@ -1357,6 +1382,7 @@ class BasePandasFrame(object):
             other=None,
         )
 
+    @apply_index_decorator(apply_axis="both")
     def _apply_full_axis_select_indices(
         self,
         axis,
@@ -1416,6 +1442,7 @@ class BasePandasFrame(object):
             new_columns = self.columns if axis == 0 else None
         return self.__constructor__(new_partitions, new_index, new_columns, None, None)
 
+    @apply_index_decorator(apply_axis="both")
     def _apply_select_indices(
         self,
         axis,
@@ -1509,6 +1536,7 @@ class BasePandasFrame(object):
                 self._column_widths_cache,
             )
 
+    @apply_index_decorator(apply_axis="both")
     def broadcast_apply(
         self, axis, func, other, join_type="left", preserve_labels=True, dtypes=None
     ):
@@ -1595,6 +1623,7 @@ class BasePandasFrame(object):
             passed_len += len(internal)
         return result_dict
 
+    @apply_index_decorator(apply_axis="both")
     def broadcast_apply_select_indices(
         self,
         axis,
@@ -1679,6 +1708,7 @@ class BasePandasFrame(object):
 
         return self.__constructor__(new_partitions, *new_axes)
 
+    @apply_index_decorator(apply_axis="both")
     def broadcast_apply_full_axis(
         self,
         axis,
@@ -1908,6 +1938,7 @@ class BasePandasFrame(object):
             axis, other._partitions, lambda x: x, lengths
         )
 
+    @apply_index_decorator(apply_axis="both")
     def _binary_op(self, op, right_frame, join_type="outer"):
         """
         Perform an operation that requires joining with another dataframe.
@@ -2003,6 +2034,7 @@ class BasePandasFrame(object):
             new_partitions, new_index, new_columns, new_lengths, new_widths, new_dtypes
         )
 
+    @apply_index_decorator(apply_axis="opposite", inherit=False, axis_arg=0)
     def groupby_reduce(
         self,
         axis,
@@ -2122,6 +2154,7 @@ class BasePandasFrame(object):
             return np.dtype(res)
         return res
 
+    @apply_index_decorator(apply_axis="both")
     def to_pandas(self):
         """Convert a Modin DataFrame to Pandas DataFrame.
 
@@ -2129,14 +2162,6 @@ class BasePandasFrame(object):
         -------
             Pandas DataFrame.
         """
-        print(self._deferred_index_apply)
-        print(self._deferred_column_apply)
-        if self._deferred_column_apply and self._deferred_index_apply:
-            self.__apply_index_objs(axis=None)
-        elif self._deferred_index_apply:
-            self.__apply_index_objs(axis=0)
-        elif self._deferred_column_apply:
-            self.__apply_index_objs(axis=1)
         df = self._frame_mgr_cls.to_pandas(self._partitions)
         if df.empty:
             if len(self.columns) != 0:
@@ -2164,6 +2189,7 @@ class BasePandasFrame(object):
         """
         return self._frame_mgr_cls.to_numpy(self._partitions, **kwargs)
 
+    @apply_index_decorator(apply_axis="both")
     def transpose(self):
         """Transpose the index and columns of this dataframe.
 
