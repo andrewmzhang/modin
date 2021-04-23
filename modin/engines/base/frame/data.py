@@ -23,7 +23,7 @@ from modin.error_message import ErrorMessage
 from modin.backends.pandas.parsers import find_common_type_cat as find_common_type
 
 
-def apply_index_decorator(apply_axis=None, inherit=False, axis_arg=-1):
+def apply_index_decorator(apply_axis=None, inherit=False, axis_arg=-1, transpose=False):
     def decorator(f):
         from functools import wraps
 
@@ -56,9 +56,12 @@ def apply_index_decorator(apply_axis=None, inherit=False, axis_arg=-1):
                     elif axis == 1 and self._apply_index_objs:
                         self._apply_index_objs(axis=1)
             result = f(self, *args, **kwargs)
-            if inherit:
+            if inherit and not transpose:
                 result._deferred_index_apply = self._deferred_index_apply
                 result._deferred_column_apply = self._deferred_column_apply
+            elif inherit and transpose:
+                result._deferred_index_apply = self._deferred_column_apply
+                result._deferred_column_apply = self._deferred_index_apply
             return result
 
         return magic
@@ -2034,7 +2037,7 @@ class BasePandasFrame(object):
             new_partitions, new_index, new_columns, new_lengths, new_widths, new_dtypes
         )
 
-    @apply_index_decorator(apply_axis="opposite", inherit=False, axis_arg=0)
+    @apply_index_decorator(apply_axis="opposite", axis_arg=0)
     def groupby_reduce(
         self,
         axis,
@@ -2189,7 +2192,7 @@ class BasePandasFrame(object):
         """
         return self._frame_mgr_cls.to_numpy(self._partitions, **kwargs)
 
-    @apply_index_decorator(apply_axis="both")
+    @apply_index_decorator(inherit=True, transpose=True)
     def transpose(self):
         """Transpose the index and columns of this dataframe.
 
@@ -2200,10 +2203,13 @@ class BasePandasFrame(object):
         new_partitions = self._frame_mgr_cls.lazy_map_partitions(
             self._partitions, lambda df: df.T
         ).T
-        new_dtypes = pandas.Series(
-            np.full(len(self.index), find_common_type(self.dtypes.values)),
-            index=self.index,
-        )
+        if self._dtypes is not None:
+            new_dtypes = pandas.Series(
+                np.full(len(self.index), find_common_type(self.dtypes.values)),
+                index=self.index,
+            )
+        else:
+            new_dtypes = None
         return self.__constructor__(
             new_partitions,
             self.columns,
